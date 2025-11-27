@@ -4,75 +4,92 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
 
-st.set_page_config(page_title="Teacher Portal", layout="centered", page_icon="👨‍🏫")
-st.markdown("""<style>body { direction: rtl; } .stButton>button { width: 100%; }</style>""", unsafe_allow_html=True)
+st.set_page_config(page_title="بوابة الطالب", page_icon="🎓")
 
-SHEET_NAME = "users_database"
-
-@st.cache_resource
-def get_client():
-    if "gcp_service_account" not in st.secrets:
-        st.error("⚠️ يرجى إضافة المفاتيح في Secrets لهذا التطبيق.")
-        st.stop()
+# --- الاتصال (نفس الكود) ---
+def get_database():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    try:
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        if "private_key" in creds_dict:
-            creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        return gspread.authorize(creds)
-    except: return None
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
+    client = gspread.authorize(creds)
+    return client.open("School_System")
 
-def main():
-    if 'teacher_user' not in st.session_state:
-        st.markdown("<h1 style='text-align: center; color: #2e86c1;'>👨‍🏫 بوابة المعلم</h1>", unsafe_allow_html=True)
-        with st.form("login"):
-            c = st.text_input("كود المعلم")
-            p = st.text_input("كلمة المرور", type="password")
-            if st.form_submit_button("دخول"):
-                client = get_client()
-                try:
-                    ws = client.open(SHEET_NAME).worksheet("Teachers_Main")
-                    df = pd.DataFrame(ws.get_all_records())
-                    df['Code'] = df['Code'].astype(str).str.strip()
-                    df['Password'] = df['Password'].astype(str).str.strip()
-                    u = df[(df['Code']==str(c).strip()) & (df['Password']==str(p).strip())]
-                    if not u.empty:
-                        st.session_state['teacher_user'] = u.iloc[0].to_dict()
-                        st.rerun()
-                    else: st.error("خطأ في البيانات")
-                except: st.error("خطأ اتصال")
-    else:
-        u = st.session_state['teacher_user']
-        st.markdown(f"### أهلاً بك د/ {u['Name']}")
-        if st.button("خروج", type="primary"):
-            del st.session_state['teacher_user']
-            st.rerun()
-        st.divider()
-        st.info("المواد الدراسية المسندة إليك")
+# --- تسجيل الدخول ---
+if 'student_logged_in' not in st.session_state:
+    st.session_state['student_logged_in'] = False
+
+if not st.session_state['student_logged_in']:
+    st.title("🔐 تسجيل دخول الطالب")
+    with st.form("st_login"):
+        user_code = st.text_input("كود الطالب")
+        user_pass = st.text_input("الباسوورد", type="password")
+        btn = st.form_submit_button("دخول")
         
-        client = get_client()
-        sheet = client.open(SHEET_NAME)
-        try:
-            sub_ws = sheet.worksheet("Subjects_Data")
-            df_sub = pd.DataFrame(sub_ws.get_all_records())
-            df_sub['Teacher_Code'] = df_sub['Teacher_Code'].astype(str)
-            my_subs = df_sub[df_sub['Teacher_Code'] == str(u['Code'])]
-            
-            if not my_subs.empty:
-                for i, r in my_subs.iterrows():
-                    with st.expander(f"📘 مادة: {r['Subject_Name']} (الفرقة {r['Year_Level']})"):
-                        st_code = st.text_input("كود الطالب", key=f"s{i}")
-                        grade = st.selectbox("التقدير", ["-", "ناجح", "راسب", "امتياز"], key=f"g{i}")
-                        if st.button("رصد الدرجة", key=f"b{i}"):
-                            if st_code and grade != "-":
-                                try:
-                                    ws_st = sheet.worksheet(st_code)
-                                    ws_st.append_row([f"نتيجة {r['Subject_Name']}", grade, str(datetime.now()), ""])
-                                    st.success(f"تم رصد {grade} للطالب")
-                                except: st.error("كود الطالب غير صحيح")
-            else: st.warning("لا توجد مواد مسندة إليك.")
-        except: st.error("جدول المواد غير موجود")
+        if btn:
+            sheet = get_database()
+            ws = sheet.worksheet("Students")
+            try:
+                cell = ws.find(user_code)
+                if cell:
+                    row_vals = ws.row_values(cell.row)
+                    # Password is col 6 (index 5)
+                    real_pass = row_vals[5]
+                    if str(user_pass).strip() == str(real_pass).strip() and real_pass != "":
+                        st.session_state['student_logged_in'] = True
+                        st.session_state['student_data'] = row_vals
+                        st.rerun()
+                    else:
+                        st.error("بيانات خاطئة")
+                else:
+                    st.error("الكود غير موجود")
+            except:
+                st.error("حدث خطأ في الاتصال")
 
-if __name__ == '__main__':
-    main()
+# --- لوحة التحكم ---
+else:
+    data = st.session_state['student_data']
+    # Data structure: [ID, Name, Phone, Total, Paid, Pass, RegDate]
+    
+    st.title(f"مرحباً, {data[1]} 👋")
+    st.caption(f"تاريخ الدخول: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+    
+    # 1. بيانات الطالب
+    with st.expander("📄 بياناتي المالية", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        col1.metric("كود الطالب", data[0])
+        col2.metric("تاريخ التسجيل", data[6])
+        col3.metric("المبلغ المدفوع", f"{data[4]} ج.م")
+    
+    sheet = get_database()
+
+    # 2. المواد والروابط
+    st.subheader("📚 المواد والروابط")
+    ws_mat = sheet.worksheet("Materials")
+    mat_data = pd.DataFrame(ws_mat.get_all_records())
+    
+    # عرض المواد العامة
+    st.markdown("##### 🌍 روابط عامة")
+    global_mats = mat_data[mat_data['Type'] == 'Global']
+    for index, row in global_mats.iterrows():
+        st.markdown(f"- [{row['Title']}]({row['Link']})")
+        
+    # عرض مواد المعلمين (يمكنك فلترتها لاحقاً حسب الصف لو أضفت خانة الصف للمواد)
+    st.markdown("##### 📖 روابط المواد")
+    subject_mats = mat_data[mat_data['Type'] == 'Subject']
+    for index, row in subject_mats.iterrows():
+         st.markdown(f"- **{row['Title']}**: [اضغط هنا]({row['Link']})")
+
+    # 3. النتائج
+    st.subheader("🏆 النتائج والدرجات")
+    ws_grades = sheet.worksheet("Grades")
+    all_grades = ws_grades.get_all_records()
+    df_grades = pd.DataFrame(all_grades)
+    
+    # تحويل العمود لسترينج للمقارنة
+    df_grades['StudentID'] = df_grades['StudentID'].astype(str)
+    
+    my_grades = df_grades[df_grades['StudentID'] == str(data[0])]
+    
+    if not my_grades.empty:
+        st.table(my_grades[['Subject', 'Score', 'Status', 'Date']])
+    else:
+        st.info("لم يتم رصد درجات بعد.")
